@@ -16,7 +16,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed \
-            base-devel git openssh curl jq pacman-contrib rsync rust cargo
+            base-devel git openssh curl jq pacman-contrib rsync rust cargo perl nasm
       - name: Create build user
         run: |
           useradd -m -u 1000 builder
