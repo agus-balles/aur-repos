@@ -69,8 +69,8 @@ jobs:
             echo "No changes; skipping builds."
             exit 0
           fi
-          cd llmfit
-          makepkg -s --noconfirm --needed
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su - builder -c "cd '$GITHUB_WORKSPACE/llmfit' && makepkg -s --noconfirm --needed"
 
       - name: Test build (llmfit-bin)
         run: |
@@ -78,8 +78,8 @@ jobs:
             echo "No changes; skipping builds."
             exit 0
           fi
-          cd llmfit-bin
-          makepkg -s --noconfirm --needed
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su - builder -c "cd '$GITHUB_WORKSPACE/llmfit-bin' && makepkg -s --noconfirm --needed"
 
       - name: Commit (if changed)
         id: commit
