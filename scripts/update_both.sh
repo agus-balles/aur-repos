@@ -4,7 +4,8 @@ set -euo pipefail
 UPSTREAM_OWNER="AlexsJones"
 UPSTREAM_REPO="llmfit"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Always operate relative to the git repo root
+ROOT="$(git rev-parse --show-toplevel)"
 
 latest_tag="$(curl -fsSL "https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest" | jq -r '.tag_name')"
 latest="${latest_tag#v}"
@@ -18,10 +19,20 @@ echo "Latest upstream version: $latest"
 
 bump_pkgver() {
   local dir="$1"
+  local file="${dir}/PKGBUILD"
+
+  if [[ ! -f "$file" ]]; then
+    echo "ERROR: PKGBUILD not found at: $file"
+    echo "Repo root: $ROOT"
+    echo "Contents of $dir:"
+    ls -la "$dir" || true
+    exit 1
+  fi
+
   echo "==> Updating $dir"
-  sed -i "s/^pkgver=.*/pkgver=${latest}/" "${dir}/PKGBUILD"
-  if grep -q '^pkgrel=' "${dir}/PKGBUILD"; then
-    sed -i "s/^pkgrel=.*/pkgrel=1/" "${dir}/PKGBUILD"
+  sed -i "s/^pkgver=.*/pkgver=${latest}/" "$file"
+  if grep -q '^pkgrel=' "$file"; then
+    sed -i "s/^pkgrel=.*/pkgrel=1/" "$file"
   fi
 }
 
