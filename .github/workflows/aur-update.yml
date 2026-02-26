@@ -60,7 +60,8 @@ jobs:
 
       - name: Update both PKGBUILDs + SRCINFO
         run: |
-          ./scripts/update_both.sh
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su - builder -c "cd '$GITHUB_WORKSPACE' && ./scripts/update_both.sh"
 
       - name: Test build (llmfit)
         run: |
