@@ -17,7 +17,12 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed \
             base-devel git openssh curl jq pacman-contrib rsync rust cargo
-
+      - name: Create build user
+        run: |
+          useradd -m -u 1000 builder
+          passwd -d builder
+          mkdir -p /home/builder/.ssh
+          chown -R builder:builder /home/builder
       - name: Checkout
         uses: actions/checkout@v4
 
