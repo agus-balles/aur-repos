@@ -133,8 +133,7 @@ jobs:
 
           git -C "$repo" commit -m "$msg" || true
           git -C "$repo" push || true
-
-        - name: Push llmfit-bin to AUR (best effort)
+      - name: Push llmfit-bin to AUR (best effort)
         if: steps.commit.outputs.changed == 'true'
         run: |
           set -euo pipefail
