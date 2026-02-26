@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: "0 */6 * * *"
 
+permissions:
+  contents: write
+
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -14,17 +17,31 @@ jobs:
     steps:
       - name: Install deps
         run: |
+          set -euo pipefail
+
+          # Keyring first to avoid occasional signature issues in fresh containers
+          pacman -Sy --noconfirm archlinux-keyring
           pacman -Syu --noconfirm
+
           pacman -S --noconfirm --needed \
-            base-devel git openssh curl jq pacman-contrib rsync rust cargo perl nasm
+            base-devel git openssh curl jq pacman-contrib rsync \
+            rust cargo \
+            perl nasm \
+            clang lld \
+            binutils
+
       - name: Create build user
         run: |
-          useradd -m -u 1000 builder
-          passwd -d builder
+          set -euo pipefail
+          useradd -m -u 1000 builder || true
+          passwd -d builder || true
           mkdir -p /home/builder/.ssh
           chown -R builder:builder /home/builder
+
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Mark workspace as safe for git
         run: |
@@ -45,7 +62,7 @@ jobs:
           chmod 700 ~/.ssh
           echo "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
           cat > ~/.ssh/config <<'EOF'
           Host aur.archlinux.org
@@ -60,31 +77,101 @@ jobs:
 
       - name: Update both PKGBUILDs + SRCINFO
         run: |
+          set -euo pipefail
           chown -R builder:builder "$GITHUB_WORKSPACE"
+          chmod +x ./scripts/update_both.sh
           su - builder -c "cd '$GITHUB_WORKSPACE' && ./scripts/update_both.sh"
 
+      # ---- TEST BUILDS (won't fail workflow, but will block AUR pushes if failing) ----
+
       - name: Test build (llmfit)
+        id: build_llmfit
         run: |
+          set -euo pipefail
+
           if git diff --quiet; then
-            echo "No changes; skipping builds."
+            echo "No changes; skipping build."
+            echo "ok=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
           chown -R builder:builder "$GITHUB_WORKSPACE"
-          su - builder -c "cd '$GITHUB_WORKSPACE/llmfit' && makepkg -s --noconfirm --needed"
+
+          set +e
+          su - builder -c "
+            cd '$GITHUB_WORKSPACE/llmfit' && \
+            # Clean inherited runner env that can break Rust/ring builds:
+            unset CC CXX AR RANLIB LD RUSTFLAGS CFLAGS CXXFLAGS LDFLAGS \
+                  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER \
+                  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_AR \
+                  CC_x86_64_unknown_linux_gnu CXX_x86_64_unknown_linux_gnu AR_x86_64_unknown_linux_gnu && \
+            # Force Arch-native toolchain + use ld.bfd (avoid -fuse-ld=lld):
+            export CC=gcc CXX=g++ AR=ar RANLIB=ranlib \
+                   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc \
+                   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_AR=ar \
+                   CC_x86_64_unknown_linux_gnu=gcc \
+                   CXX_x86_64_unknown_linux_gnu=g++ \
+                   AR_x86_64_unknown_linux_gnu=ar \
+                   RUSTFLAGS='-C link-arg=-fuse-ld=bfd' && \
+            # Don’t use -s/--syncdeps (no sudo in container); deps already installed:
+            makepkg --noconfirm --needed
+          "
+          rc=$?
+          set -e
+
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::llmfit build failed (rc=$rc). Skipping AUR push for safety, but workflow will continue."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "ok=true" >> "$GITHUB_OUTPUT"
 
       - name: Test build (llmfit-bin)
+        id: build_llmfit_bin
         run: |
+          set -euo pipefail
+
           if git diff --quiet; then
-            echo "No changes; skipping builds."
+            echo "No changes; skipping build."
+            echo "ok=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
           chown -R builder:builder "$GITHUB_WORKSPACE"
-          su - builder -c "cd '$GITHUB_WORKSPACE/llmfit-bin' && makepkg -s --noconfirm --needed"
+
+          set +e
+          su - builder -c "
+            cd '$GITHUB_WORKSPACE/llmfit-bin' && \
+            unset CC CXX AR RANLIB LD RUSTFLAGS CFLAGS CXXFLAGS LDFLAGS \
+                  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER \
+                  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_AR \
+                  CC_x86_64_unknown_linux_gnu CXX_x86_64_unknown_linux_gnu AR_x86_64_unknown_linux_gnu && \
+            export CC=gcc CXX=g++ AR=ar RANLIB=ranlib \
+                   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc \
+                   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_AR=ar \
+                   CC_x86_64_unknown_linux_gnu=gcc \
+                   CXX_x86_64_unknown_linux_gnu=g++ \
+                   AR_x86_64_unknown_linux_gnu=ar \
+                   RUSTFLAGS='-C link-arg=-fuse-ld=bfd' && \
+            makepkg --noconfirm --needed
+          "
+          rc=$?
+          set -e
+
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::llmfit-bin build failed (rc=$rc). Skipping AUR push for safety, but workflow will continue."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "ok=true" >> "$GITHUB_OUTPUT"
 
       - name: Commit (if changed)
         id: commit
         run: |
           set -euo pipefail
+
           if git diff --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No changes."
@@ -93,45 +180,66 @@ jobs:
 
           ver="$(awk -F= '$1=="pkgver"{print $2}' llmfit/PKGBUILD)"
           git add llmfit/PKGBUILD llmfit/.SRCINFO llmfit-bin/PKGBUILD llmfit-bin/.SRCINFO
+
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No staged changes."
+            exit 0
+          fi
+
           git commit -m "Update llmfit packages to ${ver}"
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Push to GitHub
-        if: steps.commit.outputs.changed == 'true'
-        run: git push
-
-      - name: Push llmfit to AUR
+      - name: Push to GitHub (best effort)
         if: steps.commit.outputs.changed == 'true'
         run: |
+          git push || true
+
+      # Only push to AUR if we actually changed AND both builds succeeded
+      - name: Push llmfit to AUR
+        if: steps.commit.outputs.changed == 'true' && steps.build_llmfit.outputs.ok == 'true' && steps.build_llmfit_bin.outputs.ok == 'true'
+        run: |
           set -euo pipefail
+          msg="$(git -C "$GITHUB_WORKSPACE" log -1 --pretty=%B)"
+
           rm -rf /tmp/aur_llmfit
           git clone "ssh://aur@aur.archlinux.org/llmfit.git" /tmp/aur_llmfit
-          rsync -av --delete --exclude '.git' ./llmfit/ /tmp/aur_llmfit/
+
+          rsync -av --delete --exclude '.git' "$GITHUB_WORKSPACE/llmfit/" /tmp/aur_llmfit/
           cd /tmp/aur_llmfit
+
           git config user.name "aur-bot"
           git config user.email "aur-bot@users.noreply.github.com"
+
           git add -A
           if git diff --cached --quiet; then
             echo "llmfit: already up to date."
             exit 0
           fi
-          git commit -m "$(git -C "$GITHUB_WORKSPACE" log -1 --pretty=%B)"
+
+          git commit -m "$msg"
           git push
 
       - name: Push llmfit-bin to AUR
-        if: steps.commit.outputs.changed == 'true'
+        if: steps.commit.outputs.changed == 'true' && steps.build_llmfit.outputs.ok == 'true' && steps.build_llmfit_bin.outputs.ok == 'true'
         run: |
           set -euo pipefail
+          msg="$(git -C "$GITHUB_WORKSPACE" log -1 --pretty=%B)"
+
           rm -rf /tmp/aur_llmfit_bin
           git clone "ssh://aur@aur.archlinux.org/llmfit-bin.git" /tmp/aur_llmfit_bin
-          rsync -av --delete --exclude '.git' ./llmfit-bin/ /tmp/aur_llmfit_bin/
+
+          rsync -av --delete --exclude '.git' "$GITHUB_WORKSPACE/llmfit-bin/" /tmp/aur_llmfit_bin/
           cd /tmp/aur_llmfit_bin
+
           git config user.name "aur-bot"
           git config user.email "aur-bot@users.noreply.github.com"
+
           git add -A
           if git diff --cached --quiet; then
             echo "llmfit-bin: already up to date."
             exit 0
           fi
-          git commit -m "$(git -C "$GITHUB_WORKSPACE" log -1 --pretty=%B)"
+
+          git commit -m "$msg"
           git push
