@@ -1,0 +1,131 @@
+name: Update AUR packages (llmfit + llmfit-bin)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Install deps
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            base-devel git openssh curl jq pacman-contrib rsync rust cargo
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Mark workspace as safe for git
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(pwd)"
+
+      - name: Git identity
+        run: |
+          git config --global user.name "aur-bot"
+          git config --global user.email "aur-bot@users.noreply.github.com"
+
+      - name: Setup SSH for AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            HostName aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/id_ed25519
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Update both PKGBUILDs + SRCINFO
+        run: |
+          ./scripts/update_both.sh
+
+      - name: Test build (llmfit)
+        run: |
+          if git diff --quiet; then
+            echo "No changes; skipping builds."
+            exit 0
+          fi
+          cd llmfit
+          makepkg -s --noconfirm --needed
+
+      - name: Test build (llmfit-bin)
+        run: |
+          if git diff --quiet; then
+            echo "No changes; skipping builds."
+            exit 0
+          fi
+          cd llmfit-bin
+          makepkg -s --noconfirm --needed
+
+      - name: Commit (if changed)
+        id: commit
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No changes."
+            exit 0
+          fi
+
+          ver="$(awk -F= '$1=="pkgver"{print $2}' llmfit/PKGBUILD)"
+          git add llmfit/PKGBUILD llmfit/.SRCINFO llmfit-bin/PKGBUILD llmfit-bin/.SRCINFO
+          git commit -m "Update llmfit packages to ${ver}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push to GitHub
+        if: steps.commit.outputs.changed == 'true'
+        run: git push
+
+      - name: Push llmfit to AUR
+        if: steps.commit.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/aur_llmfit
+          git clone "ssh://aur@aur.archlinux.org/llmfit.git" /tmp/aur_llmfit
+          rsync -av --delete --exclude '.git' ./llmfit/ /tmp/aur_llmfit/
+          cd /tmp/aur_llmfit
+          git config user.name "aur-bot"
+          git config user.email "aur-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "llmfit: already up to date."
+            exit 0
+          fi
+          git commit -m "$(git -C "$GITHUB_WORKSPACE" log -1 --pretty=%B)"
+          git push
+
+      - name: Push llmfit-bin to AUR
+        if: steps.commit.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/aur_llmfit_bin
+          git clone "ssh://aur@aur.archlinux.org/llmfit-bin.git" /tmp/aur_llmfit_bin
+          rsync -av --delete --exclude '.git' ./llmfit-bin/ /tmp/aur_llmfit_bin/
+          cd /tmp/aur_llmfit_bin
+          git config user.name "aur-bot"
+          git config user.email "aur-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "llmfit-bin: already up to date."
+            exit 0
+          fi
+          git commit -m "$(git -C "$GITHUB_WORKSPACE" log -1 --pretty=%B)"
+          git push
