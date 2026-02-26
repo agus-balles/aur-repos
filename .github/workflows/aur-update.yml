@@ -112,52 +112,51 @@ jobs:
           set -euo pipefail
 
           msg="$(git -C "$GITHUB_WORKSPACE" log -1 --pretty=%B)"
+          repo="/tmp/aur_llmfit"
 
-          rm -rf /tmp/aur_llmfit
-          if ! git clone "ssh://aur@aur.archlinux.org/llmfit.git" /tmp/aur_llmfit; then
-            echo "WARN: failed to clone llmfit AUR repo; skipping."
-            exit 0
-          fi
+          rm -rf "$repo"
+          git clone "ssh://aur@aur.archlinux.org/llmfit.git" "$repo" || { echo "WARN: clone failed"; exit 0; }
 
-          rsync -av --delete --exclude '.git' "$GITHUB_WORKSPACE/llmfit/" /tmp/aur_llmfit/
-          cd /tmp/aur_llmfit
+          # Ensure it really is a git repo
+          test -d "$repo/.git" || { echo "WARN: $repo is not a git repo"; ls -la "$repo" || true; exit 0; }
 
-          git config user.name "aur-bot"
-          git config user.email "aur-bot@users.noreply.github.com"
+          rsync -av --delete --exclude '.git' "$GITHUB_WORKSPACE/llmfit/" "$repo/"
 
-          git add -A
-          if git diff --cached --quiet; then
+          git -C "$repo" config user.name "aur-bot"
+          git -C "$repo" config user.email "aur-bot@users.noreply.github.com"
+
+          git -C "$repo" add -A
+          if git -C "$repo" diff --cached --quiet; then
             echo "llmfit: already up to date."
             exit 0
           fi
 
-          git commit -m "$msg" || true
-          git push || true
+          git -C "$repo" commit -m "$msg" || true
+          git -C "$repo" push || true
 
-      - name: Push llmfit-bin to AUR (best effort)
+        - name: Push llmfit-bin to AUR (best effort)
         if: steps.commit.outputs.changed == 'true'
         run: |
           set -euo pipefail
 
           msg="$(git -C "$GITHUB_WORKSPACE" log -1 --pretty=%B)"
+          repo="/tmp/aur_llmfit_bin"
 
-          rm -rf /tmp/aur_llmfit_bin
-          if ! git clone "ssh://aur@aur.archlinux.org/llmfit-bin.git" /tmp/aur_llmfit_bin; then
-            echo "WARN: failed to clone llmfit-bin AUR repo; skipping."
-            exit 0
-          fi
+          rm -rf "$repo"
+          git clone "ssh://aur@aur.archlinux.org/llmfit-bin.git" "$repo" || { echo "WARN: clone failed"; exit 0; }
 
-          rsync -av --delete --exclude '.git' "$GITHUB_WORKSPACE/llmfit-bin/" /tmp/aur_llmfit_bin/
-          cd /tmp/aur_llmfit_bin
+          test -d "$repo/.git" || { echo "WARN: $repo is not a git repo"; ls -la "$repo" || true; exit 0; }
 
-          git config user.name "aur-bot"
-          git config user.email "aur-bot@users.noreply.github.com"
+          rsync -av --delete --exclude '.git' "$GITHUB_WORKSPACE/llmfit-bin/" "$repo/"
 
-          git add -A
-          if git diff --cached --quiet; then
+          git -C "$repo" config user.name "aur-bot"
+          git -C "$repo" config user.email "aur-bot@users.noreply.github.com"
+
+          git -C "$repo" add -A
+          if git -C "$repo" diff --cached --quiet; then
             echo "llmfit-bin: already up to date."
             exit 0
           fi
 
-          git commit -m "$msg" || true
-          git push || true
+          git -C "$repo" commit -m "$msg" || true
+          git -C "$repo" push || true
