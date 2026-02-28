@@ -5,157 +5,99 @@ on:
   schedule:
     - cron: "0 */6 * * *"
 
+concurrency:
+  group: aur-update
+  cancel-in-progress: false
+
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   update:
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
+    env:
+      PACKAGES: "llmfit llmfit-bin"
 
     steps:
-      - name: Install deps
+      - name: Install dependencies
         run: |
-          set -e
+          set -euo pipefail
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed \
             base-devel git openssh curl jq pacman-contrib rsync
-
-      - name: Create build user
-        run: |
-          set -e
-          useradd -m -u 1000 builder || true
-          passwd -d builder || true
-          mkdir -p /home/builder/.ssh
-          chown -R builder:builder /home/builder
 
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Mark workspace as safe for git
+      - name: Create non-root user for makepkg
         run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$(pwd)"
-
-      - name: Git identity
-        run: |
-          git config --global user.name "aur-bot"
-          git config --global user.email "aur-bot@users.noreply.github.com"
+          set -euo pipefail
+          id -u builder >/dev/null 2>&1 || useradd -m -u 1000 builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
 
       - name: Setup SSH for AUR
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
+          : "${AUR_SSH_PRIVATE_KEY:?AUR_SSH_PRIVATE_KEY secret is required}"
 
           mkdir -p /root/.ssh
           chmod 700 /root/.ssh
-
-          # Write key
-          echo "$AUR_SSH_PRIVATE_KEY" > /root/.ssh/id_ed25519
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > /root/.ssh/id_ed25519
           chmod 600 /root/.ssh/id_ed25519
 
-          # Create known_hosts and pin AUR host key
-          touch /root/.ssh/known_hosts
+          ssh-keyscan -H aur.archlinux.org > /root/.ssh/known_hosts
           chmod 600 /root/.ssh/known_hosts
-          ssh-keyscan -H aur.archlinux.org >> /root/.ssh/known_hosts
 
-          # Force git/ssh to use exactly this key + known_hosts
-          echo "GIT_SSH_COMMAND=ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/known_hosts" >> $GITHUB_ENV
+          SSH_CMD="ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/known_hosts"
+          echo "GIT_SSH_COMMAND=${SSH_CMD}" >> "$GITHUB_ENV"
 
-          # Sanity check (should print a greeting or permission denied, but NOT host key failure)
-          $GIT_SSH_COMMAND -T aur@aur.archlinux.org 2>&1 | head -n 30 || true
+          # Sanity check connectivity/auth; ignore non-zero to avoid false negatives on banner output.
+          ${SSH_CMD} -T aur@aur.archlinux.org 2>&1 | head -n 20 || true
 
-      - name: Update both PKGBUILDs + SRCINFO
+      - name: Update PKGBUILDs and SRCINFO
         run: |
-          set -e
-          chown -R builder:builder "$GITHUB_WORKSPACE"
-          # Make sure script is executable
+          set -euo pipefail
           chmod +x ./scripts/update_both.sh
-          su - builder -c "cd '$GITHUB_WORKSPACE' && ./scripts/update_both.sh"
+          runuser -u builder -- bash -lc "cd '$GITHUB_WORKSPACE' && ./scripts/update_both.sh"
 
-      - name: Commit (if changed)
-        id: commit
+      - name: Push updates to AUR repos
         run: |
           set -euo pipefail
+          unset GIT_DIR GIT_WORK_TREE
 
-          if git diff --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No changes."
-            exit 0
+          changed_any=false
+          for pkg in $PACKAGES; do
+            repo="/tmp/aur_${pkg}"
+            rm -rf "$repo"
+
+            echo "==> Syncing ${pkg}"
+            git clone "https://aur.archlinux.org/${pkg}.git" "$repo"
+            git -C "$repo" remote set-url origin "ssh://aur@aur.archlinux.org/${pkg}.git"
+            test -d "$repo/.git"
+            cp "$GITHUB_WORKSPACE/$pkg/PKGBUILD" "$repo/PKGBUILD"
+            cp "$GITHUB_WORKSPACE/$pkg/.SRCINFO" "$repo/.SRCINFO"
+
+            git -C "$repo" config user.name "aur-bot"
+            git -C "$repo" config user.email "aur-bot@users.noreply.github.com"
+            git -C "$repo" add PKGBUILD .SRCINFO
+
+            if git -C "$repo" diff --cached --quiet; then
+              echo "${pkg}: no changes."
+              continue
+            fi
+
+            ver="$(awk -F= '$1=="pkgver"{print $2}' "$GITHUB_WORKSPACE/$pkg/PKGBUILD")"
+            git -C "$repo" commit -m "${pkg}: update to ${ver}"
+            git -C "$repo" push
+            changed_any=true
+          done
+
+          if [[ "$changed_any" == "false" ]]; then
+            echo "No AUR updates were needed."
           fi
-
-          ver="$(awk -F= '$1=="pkgver"{print $2}' llmfit/PKGBUILD)"
-          git add llmfit/PKGBUILD llmfit/.SRCINFO llmfit-bin/PKGBUILD llmfit-bin/.SRCINFO
-
-          # In case something else modified those files but still no staged diff:
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No staged changes."
-            exit 0
-          fi
-
-          git commit -m "Update llmfit packages to ${ver}"
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Push to GitHub (best effort)
-        if: steps.commit.outputs.changed == 'true'
-        run: |
-          git push || true
-
-      - name: Push llmfit to AUR (best effort)
-        if: steps.commit.outputs.changed == 'true'
-        run: |
-          set -euo pipefail
-
-          msg="$(git -C "$GITHUB_WORKSPACE" log -1 --pretty=%B)"
-          repo="/tmp/aur_llmfit"
-
-          rm -rf "$repo"
-          git clone "ssh://aur@aur.archlinux.org/llmfit.git" "$repo" || { echo "WARN: clone failed"; exit 0; }
-
-          # Ensure it really is a git repo
-          test -d "$repo/.git" || { echo "WARN: $repo is not a git repo"; ls -la "$repo" || true; exit 0; }
-
-          rsync -av --delete --exclude '.git' "$GITHUB_WORKSPACE/llmfit/" "$repo/"
-
-          git -C "$repo" config user.name "aur-bot"
-          git -C "$repo" config user.email "aur-bot@users.noreply.github.com"
-
-          git -C "$repo" add -A
-          if git -C "$repo" diff --cached --quiet; then
-            echo "llmfit: already up to date."
-            exit 0
-          fi
-
-          git -C "$repo" commit -m "$msg" || true
-          git -C "$repo" push || true
-      - name: Push llmfit-bin to AUR (best effort)
-        if: steps.commit.outputs.changed == 'true'
-        run: |
-          set -euo pipefail
-
-          msg="$(git -C "$GITHUB_WORKSPACE" log -1 --pretty=%B)"
-          repo="/tmp/aur_llmfit_bin"
-
-          rm -rf "$repo"
-          git clone "ssh://aur@aur.archlinux.org/llmfit-bin.git" "$repo" || { echo "WARN: clone failed"; exit 0; }
-
-          test -d "$repo/.git" || { echo "WARN: $repo is not a git repo"; ls -la "$repo" || true; exit 0; }
-
-          rsync -av --delete --exclude '.git' "$GITHUB_WORKSPACE/llmfit-bin/" "$repo/"
-
-          git -C "$repo" config user.name "aur-bot"
-          git -C "$repo" config user.email "aur-bot@users.noreply.github.com"
-
-          git -C "$repo" add -A
-          if git -C "$repo" diff --cached --quiet; then
-            echo "llmfit-bin: already up to date."
-            exit 0
-          fi
-
-          git -C "$repo" commit -m "$msg" || true
-          git -C "$repo" push || true

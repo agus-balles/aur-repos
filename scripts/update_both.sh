@@ -4,8 +4,8 @@ set -euo pipefail
 UPSTREAM_OWNER="AlexsJones"
 UPSTREAM_REPO="llmfit"
 
-# Always operate relative to the git repo root
-ROOT="$(git rev-parse --show-toplevel)"
+# Always operate relative to repository root (parent of scripts/).
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 latest_tag="$(curl -fsSL "https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest" | jq -r '.tag_name')"
 latest="${latest_tag#v}"
@@ -16,6 +16,13 @@ if [[ -z "$latest" || "$latest" == "null" ]]; then
 fi
 
 echo "Latest upstream version: $latest"
+
+for cmd in makepkg updpkgsums curl jq sed awk; do
+  command -v "$cmd" >/dev/null || {
+    echo "Missing required command: $cmd"
+    exit 1
+  }
+done
 
 bump_pkgver() {
   local dir="$1"
@@ -30,9 +37,9 @@ bump_pkgver() {
   fi
 
   echo "==> Updating $dir"
-  sed -i "s/^pkgver=.*/pkgver=${latest}/" "$file"
+  sed -i -E "s/^pkgver=.*/pkgver=${latest}/" "$file"
   if grep -q '^pkgrel=' "$file"; then
-    sed -i "s/^pkgrel=.*/pkgrel=1/" "$file"
+    sed -i -E "s/^pkgrel=.*/pkgrel=1/" "$file"
   fi
 }
 
