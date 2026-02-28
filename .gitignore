@@ -1,0 +1,23 @@
+# Local secrets
+.secrets
+
+# Environment files
+.env
+.env.*
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+
+# Arch makepkg artifacts
+src/
+pkg/
+*.pkg.tar.*
+*.src.tar.*
+*.log
+
+# Local GitHub Actions testing
+.act/
