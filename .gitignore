@@ -18,6 +18,7 @@ pkg/
 *.pkg.tar.*
 *.src.tar.*
 *.log
+pinchtab-bin/pinchtab-linux-amd64
 
 # Local GitHub Actions testing
 .act/

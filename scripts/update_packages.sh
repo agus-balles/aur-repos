@@ -4,7 +4,7 @@ set -euo pipefail
 # Auto-discover package directories at repository root.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-for cmd in makepkg updpkgsums curl jq sed awk find sort; do
+for cmd in makepkg updpkgsums curl jq sed awk find sort mktemp; do
   command -v "$cmd" >/dev/null || {
     echo "Missing required command: $cmd"
     exit 1
@@ -95,6 +95,19 @@ needs_checksums_update() {
   return 0
 }
 
+refresh_checksums() {
+  local dir="$1"
+  local checksum_srcdest
+
+  checksum_srcdest="$(mktemp -d)"
+  (
+    cd "$dir"
+    export SRCDEST="$checksum_srcdest"
+    updpkgsums
+  )
+  rm -rf "$checksum_srcdest"
+}
+
 echo "Discovered packages:"
 for dir in "${package_dirs[@]}"; do
   echo "  - ${dir#$ROOT/}"
@@ -125,7 +138,7 @@ for dir in "${package_dirs[@]}"; do
   bump_pkgbuild_version "$pkgbuild" "$latest"
 
   if needs_checksums_update "$pkgbuild"; then
-    (cd "$dir" && updpkgsums)
+    refresh_checksums "$dir"
   fi
 
   (cd "$dir" && makepkg --printsrcinfo > .SRCINFO)
