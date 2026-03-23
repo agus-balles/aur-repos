@@ -15,10 +15,13 @@ Thumbs.db
 # Arch makepkg artifacts
 src/
 pkg/
+*/src/
+*/pkg/
 *.pkg.tar.*
 *.src.tar.*
 *.log
 pinchtab-bin/pinchtab-linux-amd64
+llmfit/llmfit/
 
 # Local GitHub Actions testing
 .act/

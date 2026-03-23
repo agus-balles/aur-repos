@@ -2,7 +2,7 @@
 
 pkgname=llmfit
 pkgver=0.8.2
-pkgrel=1
+pkgrel=2
 pkgdesc="CLI tool to tell which LLM models will run best on your hardware"
 arch=('x86_64' 'aarch64')
 url="https://github.com/AlexsJones/llmfit"
@@ -12,7 +12,7 @@ depends=('glibc')
 makedepends=('git' 'rust' 'cargo' 'clang')
 
 source=("git+https://github.com/AlexsJones/llmfit.git#tag=v${pkgver}")
-sha256sums=('SKIP')
+sha256sums=('0bc94edc5f234d4ce42e7c741df8d32eff6a986f93b78a5eac4966c901f87f73')
 
 _setup_build_env() {
   export CC=clang
@@ -32,6 +32,11 @@ _setup_build_env() {
     *" -Clinker=clang "*) ;;
     *) export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-Clinker=clang" ;;
   esac
+}
+
+prepare() {
+  cd "${srcdir}/llmfit"
+  cargo generate-lockfile
 }
 
 build() {
