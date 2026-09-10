@@ -1,6 +1,6 @@
 pkgbase = llmfit
 	pkgdesc = CLI tool to tell which LLM models will run best on your hardware
-	pkgver = 1.1.14
+	pkgver = 1.1.15
 	pkgrel = 1
 	url = https://github.com/AlexsJones/llmfit
 	arch = x86_64
@@ -11,7 +11,7 @@ pkgbase = llmfit
 	makedepends = cargo
 	makedepends = clang
 	depends = glibc
-	source = git+https://github.com/AlexsJones/llmfit.git#tag=v1.1.14
-	sha256sums = a71a824eb71a4abddb30c46f4552f471d21f58404dc398666a0251405fa2bcb4
+	source = git+https://github.com/AlexsJones/llmfit.git#tag=v1.1.15
+	sha256sums = c316f66bd6284c9e68724d25c7c30e0fdee83245d662581c8cd37720ba8cba4e
 
 pkgname = llmfit
