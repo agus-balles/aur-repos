@@ -1,7 +1,7 @@
 # Maintainer: Agustin <agustinballesteros04@gmail.com>
 
 pkgname=llmfit
-pkgver=1.1.17
+pkgver=1.1.18
 pkgrel=1
 pkgdesc="CLI tool to tell which LLM models will run best on your hardware"
 arch=('x86_64' 'aarch64')
@@ -12,7 +12,7 @@ depends=('glibc')
 makedepends=('git' 'rust' 'cargo' 'clang')
 
 source=("git+https://github.com/AlexsJones/llmfit.git#tag=v${pkgver}")
-sha256sums=('5da7683ee6b7cb8dbd63cf163405d4c6fb00923895932a5b6094b97af37effa9')
+sha256sums=('e49c5b5444531ba688c254b092d42da2d4a5803c4f7ff46b56c4b98b979e8800')
 
 _setup_build_env() {
   export CC=clang
